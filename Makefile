@@ -36,13 +36,20 @@ SEASON ?= 25
 season:
 	$(CLI) fetch-season --season $(SEASON) --playoffs
 
-## Rules-grade every game in data/season_$(SEASON) -> logs/season_$(SEASON)/
+## Rules-grade the training seasons in date order with pregame context.
+## SEED seasons only feed the ratings (early-season priors); TRAIN seasons are graded.
+SEED  ?= 23
+TRAIN ?= 24 25
 grade:
-	$(CLI) grade-dir data/season_$(SEASON) --out-dir logs/season_$(SEASON)
+	$(CLI) grade-dir $(foreach s,$(TRAIN),data/season_$(s)) $(foreach s,$(SEED),--seed-dir data/season_$(s)) --out-dir logs
 
-## Graded logs -> finetune/data/{train,calib,test}.jsonl, split by game.
+## Graded logs -> finetune/data/{train,calib,test}.jsonl, split by game date.
 export:
-	$(CLI) export logs/season_*/*.jsonl --out-dir finetune/data
+	$(CLI) export $(foreach s,$(TRAIN),logs/season_$(s)/*.jsonl) --out-dir finetune/data
 
-## season -> grade -> export in one go.
-dataset: season grade export
+## Which snapshot fields carry signal (tree models, CPU, a few minutes).
+ablation:
+	$(PY) finetune/ablation.py $(foreach s,$(TRAIN),logs/season_$(s)) --max-rows 120000
+
+## grade -> export. Run `make season SEASON=xx` for each season first.
+dataset: grade export

@@ -20,13 +20,35 @@ header is also required. `nba_api` wraps the same URL with `requests` and is
 blocked for the same reason.
 
 ```bash
-make season SEASON=25     # 2025-26 regular season + playoffs -> data/season_25/  (~35 min, resumable)
-make grade  SEASON=25     # rules baseline + truth labels     -> logs/season_25/
-make export               # Laya training rows, split by game -> finetune/data/{train,calib,test}.jsonl
-make dataset              # all three
+make season SEASON=25     # 2025-26 regular season + playoffs -> data/season_25/  (10-40 min, resumable)
+make season SEASON=24     # 2024-25, more training data
+make season SEASON=23     # 2023-24, only seeds the early-season ratings for 2024-25
+make grade                # date-ordered grading with pregame context -> logs/season_24, logs/season_25
+make export               # Laya training rows, split by date        -> finetune/data/{train,calib,test}.jsonl
+make ablation             # tree models per question: which fields carry signal
 ```
 
 Run these from your own terminal. The season pull is a long-lived process.
+
+### Pregame context
+
+Every snapshot carries what was known before tip-off, computed only from
+earlier games (`src/nba_laya/context.py`):
+
+- Team: net / offensive / defensive rating, pace, three-point and free-throw
+  rates, opponent three rate, days of rest. Whole numbers, no record: the
+  context is constant within a game, and so is the winner, so precise values
+  let a model memorize results game by game.
+- Player (five on the floor for the team with the ball): season shot share,
+  clutch shot share (last 5 min within 8), three-point rate, plus tonight's
+  points and field goals.
+- Bonus flag when the opponent has five team fouls in the period.
+
+Early-season numbers are shrunk toward last season's. Snapshots average about
+575 tokens with the multilingual tokenizer; the cap is 1,024 including the question.
+
+Ratings mean something different in the playoffs (every matchup is two good
+teams), so both scoreboards report regular season and playoffs separately.
 
 ## Replay and scoreboard
 

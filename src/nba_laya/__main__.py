@@ -118,27 +118,33 @@ def _scoreboard(args: argparse.Namespace) -> None:
 
     from nba_laya.metrics import SCOREBOARD_QUESTIONS, summarize
 
-    by_model: dict[str, list[dict]] = {}
+    by_phase: dict[str, dict[str, list[dict]]] = {"regular season": {}, "playoffs": {}}
     for path in args.logs:
         with path.open() as handle:
             for line in handle:
                 row = json.loads(line)
-                by_model.setdefault(row["model"], []).append(row)
-    models = sorted(by_model)
-    header = f"{'question':<16}" + "".join(f"{m:>26}" for m in models)
-    print(header)
-    print(f"{'':<16}" + "".join(f"{'n    acc   brier  ece':>26}" for _ in models))
-    for question in SCOREBOARD_QUESTIONS:
-        cells = []
-        for model in models:
-            summary = summarize(by_model[model], question)
-            if summary is None:
-                cells.append(f"{'-':>26}")
-            else:
-                cells.append(
-                    f"{summary['n']:>7} {summary['accuracy']:6.3f} {summary['brier']:6.3f} {summary['ece']:5.3f}"
-                )
-        print(f"{question:<16}" + "".join(cells))
+                phase = "playoffs" if row["game_id"].startswith("004") else "regular season"
+                by_phase[phase].setdefault(row["model"], []).append(row)
+    # Team ratings mean something different in the playoffs (every matchup is
+    # two good teams), so the two phases are scored apart.
+    for phase, by_model in by_phase.items():
+        if not by_model:
+            continue
+        models = sorted(by_model)
+        print(f"\n[{phase}]")
+        print(f"{'question':<16}" + "".join(f"{m:>26}" for m in models))
+        print(f"{'':<16}" + "".join(f"{'n    acc   brier  ece':>26}" for _ in models))
+        for question in SCOREBOARD_QUESTIONS:
+            cells = []
+            for model in models:
+                summary = summarize(by_model[model], question)
+                if summary is None:
+                    cells.append(f"{'-':>26}")
+                else:
+                    cells.append(
+                        f"{summary['n']:>7} {summary['accuracy']:6.3f} {summary['brier']:6.3f} {summary['ece']:5.3f}"
+                    )
+            print(f"{question:<16}" + "".join(cells))
 
 
 def _fetch(args: argparse.Namespace) -> None:

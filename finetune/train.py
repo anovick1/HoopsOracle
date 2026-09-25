@@ -167,9 +167,24 @@ def predict_logits(model, items, tok, device, batch_size=16):
 
 
 def scoreboard(items, logits, temps, log=print):
-    """Accuracy, Brier, ECE per question, matching nba-laya scoreboard."""
+    """Accuracy, Brier, ECE per question, matching nba-laya scoreboard.
+
+    Regular season and playoffs are scored apart: team ratings mean something
+    different once every matchup is two good teams.
+    """
+    results = {}
+    for phase, prefix in (("regular season", "002"), ("playoffs", "004")):
+        sel = [(it, z) for it, z in zip(items, logits) if it["game_id"].startswith(prefix)]
+        if not sel:
+            continue
+        log(f"[{phase}]")
+        results[phase] = _scoreboard_rows(sel, temps, log)
+    return results
+
+
+def _scoreboard_rows(pairs_in, temps, log):
     per_q = defaultdict(list)
-    for it, z in zip(items, logits):
+    for it, z in pairs_in:
         z = np.asarray(z, dtype=np.float64) / temps[it["qtype"]]
         p = np.exp(z - z.max())
         p /= p.sum()
