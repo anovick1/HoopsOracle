@@ -43,8 +43,12 @@ def fetch_many(game_ids: list[str], out_dir: Path, pause: float = 0.6, log=print
             text = str(exc)
             if text.startswith("404"):
                 counts["missing"] += 1
+            elif text.startswith("403") and gid.startswith("004"):
+                # Playoff ids are enumerated for 7 games per series; the CDN answers
+                # 403 for games that were never played. Not a block.
+                counts["missing"] += 1
             elif text.startswith("403"):
-                log(f"{gid}: CDN denied the request. Stopping so the block does not harden.")
+                log(f"{gid}: CDN denied a regular-season game. Stopping so the block does not harden.")
                 counts["failed"] += 1
                 break
             else:
