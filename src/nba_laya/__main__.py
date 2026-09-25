@@ -42,7 +42,18 @@ def main() -> None:
     grade.add_argument("pbp_dir", type=Path)
     grade.add_argument("--out-dir", type=Path, default=Path("logs/graded"))
 
+    live = sub.add_parser("live", help="poll today's live games and decide at each possession")
+    live.add_argument("--model", default="rules", choices=("rules", "laya"))
+    live.add_argument("--interval", type=float, default=4.0, help="seconds between polls")
+    live.add_argument("--base-url", default=os.environ.get("LAYA_BASE_URL", "http://127.0.0.1:8000"))
+    live.add_argument("--once", action="store_true", help="one poll cycle, then exit")
+
     args = parser.parse_args()
+    if args.command == "live":
+        from nba_laya.live import run_live
+
+        run_live(interval=args.interval, model=args.model, base_url=args.base_url, once=args.once)
+        return
     if args.command == "export":
         from nba_laya.export import export
 
