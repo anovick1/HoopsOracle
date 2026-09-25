@@ -40,10 +40,19 @@ def load_rows(path):
         return [json.loads(line) for line in handle]
 
 
-def build_items(rows, tok, cfg, log=print):
+def build_items(rows, tok, cfg, limit=0, seed=0, log=print):
+    """Tokenize rows into per-question items. With a limit, rows are sampled first
+    so a 100k-item run does not tokenize the whole season."""
+    if limit:
+        rows = list(rows)
+        random.Random(seed).shuffle(rows)
     items = []
     dropped = 0
+    used = 0
     for row in rows:
+        if limit and len(items) >= limit:
+            break
+        used += 1
         state = json.loads(row["state"])
         questions = json.loads(row["questions"])
         gold = json.loads(row["gold"])
@@ -73,7 +82,7 @@ def build_items(rows, tok, cfg, log=print):
                 "ids": seq, "markers": markers, "qtype": QTYPES[t], "target": target,
                 "label": int(np.argmax(target)), "qid": qid, "game_id": row["game_id"],
             })
-    log(f"built {len(items)} items from {len(rows)} rows (dropped {dropped})")
+    log(f"built {len(items)} items from {used} of {len(rows)} rows (dropped {dropped})")
     return items
 
 
@@ -193,6 +202,8 @@ def main():
     ap.add_argument("--lr-encoder", type=float, default=2.5e-5)
     ap.add_argument("--lr-head", type=float, default=1e-4)
     ap.add_argument("--max-train", type=int, default=0, help="subsample train items (0 = all)")
+    ap.add_argument("--max-eval", type=int, default=20000,
+                    help="cap calib and test items; both are still held-out games (0 = all)")
     ap.add_argument("--seed", type=int, default=42)
     args = ap.parse_args()
 
@@ -213,12 +224,9 @@ def main():
     cfg["max_len"] = 1024
     cfg["head_max_len"] = 256
 
-    train_items = build_items(load_rows(f"{args.data}/train.jsonl"), tok, cfg)
-    calib_items = build_items(load_rows(f"{args.data}/calib.jsonl"), tok, cfg)
-    test_items = build_items(load_rows(f"{args.data}/test.jsonl"), tok, cfg)
-    if args.max_train and len(train_items) > args.max_train:
-        random.shuffle(train_items)
-        train_items = train_items[: args.max_train]
+    train_items = build_items(load_rows(f"{args.data}/train.jsonl"), tok, cfg, limit=args.max_train, seed=args.seed)
+    calib_items = build_items(load_rows(f"{args.data}/calib.jsonl"), tok, cfg, limit=args.max_eval, seed=args.seed + 1)
+    test_items = build_items(load_rows(f"{args.data}/test.jsonl"), tok, cfg, limit=args.max_eval, seed=args.seed + 2)
     weights = class_weights(train_items)
     print("class weights:", {q: w for q, w in weights.items() if any(v != 1.0 for v in w.values())})
 
