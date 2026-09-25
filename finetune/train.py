@@ -36,7 +36,14 @@ WEIGHT_CAP = 6.0
 
 
 def load_rows(path):
-    with open(path) as handle:
+    """Read a .jsonl, or the .jsonl.gz next to it if that is what got uploaded."""
+    import gzip
+
+    path = str(path)
+    if not os.path.exists(path) and os.path.exists(path + ".gz"):
+        path = path + ".gz"
+    opener = gzip.open if path.endswith(".gz") else open
+    with opener(path, "rt") as handle:
         return [json.loads(line) for line in handle]
 
 
