@@ -60,7 +60,7 @@ def to_training_row(row: dict, drop: set[str] = frozenset()) -> dict | None:
 
 
 def export(log_paths: list[Path], out_dir: Path, holdout_frac: float = 0.15, calib_frac: float = 0.10,
-           drop: set[str] = frozenset({"swing"})) -> dict[str, int]:
+           drop: set[str] = frozenset()) -> dict[str, int]:
     rows_by_game: dict[str, list[dict]] = {}
     for path in log_paths:
         with path.open() as handle:

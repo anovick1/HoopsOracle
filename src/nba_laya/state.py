@@ -11,6 +11,14 @@ from nba_laya.wp import win_prob
 TIMEOUTS_PER_GAME = 7
 LAST_PLAYS = 8
 RUN_MIN_POINTS = 6
+COMEBACK_DEFICIT = 10
+# A comeback episode closes when the deficit shrinks this far, so a team that
+# falls back to 10 down later gets a fresh question instead of a repeat.
+COMEBACK_RESET = 5
+FIELD_GOALS = {"2pt", "3pt"}
+# Action types that put the named player on the floor at that moment.
+COURT_ACTIONS = FIELD_GOALS | {"freethrow", "rebound", "turnover", "steal", "block", "jumpball"}
+COURT_FOULS = {"personal", "offensive"}
 
 
 @dataclass
@@ -35,6 +43,18 @@ class Snapshot:
     on_floor: dict[str, list[str]]
     last_plays: list[str]
     win_prob_home: float
+    shots_tonight: dict[str, int] = field(default_factory=dict)
+    comeback: dict | None = None
+
+    @property
+    def shooter_menu(self) -> list[str]:
+        """The five on the floor for the team with the ball, when all five are known."""
+        players = self.on_floor.get(self.possession or "", [])
+        return list(players) if len(players) == 5 else []
+
+    @property
+    def margin(self) -> int:
+        return abs(self.score[self.home] - self.score[self.away])
 
     def as_state(self) -> dict:
         state = {
@@ -50,6 +70,7 @@ class Snapshot:
             "fouls": self.fouls,
             "team_fouls_period": self.team_fouls_period,
             "on_floor": self.on_floor,
+            "shots_tonight": self.shots_tonight,
             "last_plays": self.last_plays,
         }
         return {key: value for key, value in state.items() if value not in (None, {}, [])}
@@ -76,6 +97,9 @@ class GameWalk:
         self.team_fouls: dict[str, int] = {}
         self.foul_period: int | None = None
         self.on_floor: dict[str, list[str]] = {}
+        self.floor_period: int | None = None
+        self.fga: dict[tuple[str, str], int] = {}
+        self.comeback_open: dict[str, bool] = {}
         self.last_plays: list[str] = []
         self.scoring_events: list[tuple[float, str, int]] = []
         self.run_team: str | None = None
@@ -134,6 +158,11 @@ class GameWalk:
             self.home: sum(points for team, points in recent if team == self.home),
             self.away: sum(points for team, points in recent if team == self.away),
         }
+        comeback = self._comeback_trigger(names)
+        with_ball = self.on_floor.get(self.possession, [])
+        shots_tonight = {
+            name: self.fga.get((self.possession, name), 0) for name in with_ball
+        } if len(with_ball) == 5 else {}
         return Snapshot(
             game_id=self.game_id,
             action_number=action.action_number,
@@ -168,7 +197,21 @@ class GameWalk:
             },
             last_plays=list(self.last_plays[-LAST_PLAYS:]),
             win_prob_home=win_prob(home_margin, left, self.possession == self.home),
+            shots_tonight=shots_tonight,
+            comeback=comeback,
         )
+
+    def _comeback_trigger(self, score: dict[str, int]) -> dict | None:
+        """Fire once when a team first falls COMEBACK_DEFICIT behind in an episode."""
+        trigger = None
+        for team, opp in ((self.home, self.away), (self.away, self.home)):
+            deficit = score[opp] - score[team]
+            if deficit >= COMEBACK_DEFICIT and not self.comeback_open.get(team):
+                self.comeback_open[team] = True
+                trigger = {"team": team, "opponent": opp, "deficit": deficit}
+            elif deficit < COMEBACK_RESET:
+                self.comeback_open[team] = False
+        return trigger
 
     def _apply(self, action: Action) -> None:
         if action.team_id and action.team_tricode:
@@ -202,16 +245,37 @@ class GameWalk:
             self.team_fouls[action.team_tricode] = self.team_fouls.get(action.team_tricode, 0) + 1
             if action.player_name and action.foul_personal_total:
                 self.fouls.setdefault(action.team_tricode, {})[action.player_name] = action.foul_personal_total
-        if action.is_substitution_out and action.team_tricode and action.player_name:
-            floor = self.on_floor.setdefault(action.team_tricode, [])
-            if action.player_name in floor:
-                floor.remove(action.player_name)
-        elif action.action_type == "substitution" and action.sub_type == "in" and action.player_name:
-            floor = self.on_floor.setdefault(action.team_tricode, [])
-            if action.player_name not in floor:
-                floor.append(action.player_name)
+        self._track_floor(action)
+        if action.action_type in FIELD_GOALS and action.team_tricode and action.player_name:
+            key = (action.team_tricode, action.player_name)
+            self.fga[key] = self.fga.get(key, 0) + 1
 
         self.possession = self._possession_after(action)
+
+    def _track_floor(self, action: Action) -> None:
+        """Lineups rebuilt each period from evidence: subs in, and anyone who records an action.
+
+        Between-period substitutions are not always on the tape, so a lineup is
+        not carried across periods. A team's lineup is only trusted at exactly five.
+        """
+        if self.floor_period != action.period:
+            self.on_floor = {}
+            self.floor_period = action.period
+        team, name = action.team_tricode, action.player_name
+        if not team or not name:
+            return
+        floor = self.on_floor.setdefault(team, [])
+        if action.is_substitution_out:
+            if name in floor:
+                floor.remove(name)
+            return
+        on_court = (
+            (action.action_type == "substitution" and action.sub_type == "in")
+            or action.action_type in COURT_ACTIONS
+            or (action.action_type == "foul" and action.sub_type in COURT_FOULS)
+        )
+        if on_court and name not in floor:
+            floor.append(name)
 
     def _points_on(self, action: Action) -> int:
         if not action.made_shot:

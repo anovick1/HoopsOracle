@@ -78,4 +78,4 @@ def summarize(rows: list[dict], question: str) -> dict | None:
     return {"question": question, "n": n, "accuracy": accuracy, "brier": brier, "ece": ece, "bins": bins}
 
 
-SCOREBOARD_QUESTIONS = ("timeout_next2", "run_continues", "next_score", "sub_next2", "winner")
+SCOREBOARD_QUESTIONS = ("winner", "possession_scores", "score_type", "run_continues", "shooter", "comeback")

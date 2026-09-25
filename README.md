@@ -39,14 +39,34 @@ make scoreboard           # Laya vs rules: n, accuracy, Brier, ECE per question
 
 ## Questions
 
-| id | type | graded against |
-| --- | --- | --- |
-| `timeout_next2` | yes/no | a timeout within the next 2 possession changes |
-| `run_continues` | yes/no | run team outscores opponent over the next 3 possessions (6+ runs only) |
-| `next_score` | home/away | team of the next scoring play, same period |
-| `sub_next2` | yes/no | a player with 4+ fouls subbed out within 2 possessions |
-| `winner` | home/away | final score |
-| `swing` | 0-3 | change in a deterministic win-probability estimate (not on the scoreboard) |
+| id | type | asked when | graded against |
+| --- | --- | --- | --- |
+| `winner` | home/away | every possession | final score |
+| `possession_scores` | yes/no | every possession | team with the ball scores before the ball changes hands |
+| `score_type` | two/three/free_throw | every possession | kind of the next made basket, same period |
+| `run_continues` | yes/no | a 6-0 or better run | run team outscores opponent over the next 3 possessions |
+| `shooter` | one of five names | all five on the floor known (~80% of possessions) | player on the team with the ball who takes its next field-goal attempt |
+| `comeback` | yes/no | once, when a team first falls 10 behind | that team leads at any later point |
+
+Training uses every possession. What gets posted is decided separately in
+`src/nba_laya/policy.py`: win-probability swings of 8+ points, runs of 8+,
+`shooter` / `possession_scores` / `score_type` in the last five minutes of a
+game within 8, and every `comeback` call.
+
+Lineups are rebuilt each period from substitutions and from anyone who records
+an action, and only trusted at exactly five, since between-period subs are not
+always on the tape.
+
+Rules baseline on the full 2025-26 season (1,315 games):
+
+| question | n | accuracy | Brier |
+| --- | --- | --- | --- |
+| `winner` | 266,336 | 0.742 | 0.163 |
+| `possession_scores` | 266,336 | 0.500 | 0.250 |
+| `score_type` | 257,039 | 0.534 | 0.390 |
+| `run_continues` | 34,874 | 0.666 | 0.222 |
+| `shooter` | 197,262 | 0.258 | 0.621 |
+| `comeback` | 2,200 | 0.635 | 0.215 |
 
 ## Environment notes
 

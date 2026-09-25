@@ -30,7 +30,8 @@ from laya.common import QTYPES, build_model, build_sequence, proper_reward, rend
 MODEL_ID = "convaiinnovations/laya"
 SUBFOLDER = "multilingual"
 # Questions whose positive class is rare. Weight = neg/pos, capped.
-RARE_YES = {"timeout_next2", "sub_next2"}
+# Empty for the current battery: the rarest yes rate is run_continues at 33%.
+RARE_YES: set[str] = set()
 WEIGHT_CAP = 6.0
 
 
