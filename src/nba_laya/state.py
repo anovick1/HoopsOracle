@@ -9,8 +9,9 @@ from nba_laya.clock import display_clock, elapsed_seconds, parse_clock, seconds_
 from nba_laya.wp import win_prob
 
 TIMEOUTS_PER_GAME = 7
-LAST_PLAYS = 8
+LAST_PLAYS = 6
 RUN_MIN_POINTS = 6
+FOUL_TROUBLE = 4
 COMEBACK_DEFICIT = 10
 # A comeback episode closes when the deficit shrinks this far, so a team that
 # falls back to 10 down later gets a fresh question instead of a repeat.
@@ -19,6 +20,13 @@ FIELD_GOALS = {"2pt", "3pt"}
 # Action types that put the named player on the floor at that moment.
 COURT_ACTIONS = FIELD_GOALS | {"freethrow", "rebound", "turnover", "steal", "block", "jumpball"}
 COURT_FOULS = {"personal", "offensive"}
+# Net rating is points per 100 possessions, about one game's worth, so the
+# rating gap is the expected full-game margin. Scaled by time left.
+HOME_COURT_POINTS = 2.5
+REGULATION_SECONDS = 48 * 60
+CLUTCH_SECONDS = 300
+CLUTCH_MARGIN = 8
+BONUS_TEAM_FOULS = 5
 
 
 @dataclass
@@ -45,6 +53,11 @@ class Snapshot:
     win_prob_home: float
     shots_tonight: dict[str, int] = field(default_factory=dict)
     comeback: dict | None = None
+    teams: dict[str, dict] = field(default_factory=dict)
+    # Five on the floor for the team with the ball: season share, clutch share,
+    # three rate (pregame) plus tonight's points and field goals.
+    players: dict[str, dict] = field(default_factory=dict)
+    in_bonus: list[str] = field(default_factory=list)
 
     @property
     def shooter_menu(self) -> list[str]:
@@ -56,9 +69,14 @@ class Snapshot:
     def margin(self) -> int:
         return abs(self.score[self.home] - self.score[self.away])
 
+    @property
+    def is_clutch(self) -> bool:
+        return self.period >= 4 and self.seconds_left <= CLUTCH_SECONDS and self.margin <= CLUTCH_MARGIN
+
     def as_state(self) -> dict:
         state = {
             "game": self.game,
+            "teams": self.teams,
             "period": self.period,
             "clock": self.clock,
             "score": self.score,
@@ -69,8 +87,9 @@ class Snapshot:
             "last_timeout": self.last_timeout,
             "fouls": self.fouls,
             "team_fouls_period": self.team_fouls_period,
+            "in_bonus": self.in_bonus,
             "on_floor": self.on_floor,
-            "shots_tonight": self.shots_tonight,
+            "players": self.players,
             "last_plays": self.last_plays,
         }
         return {key: value for key, value in state.items() if value not in (None, {}, [])}
@@ -83,9 +102,11 @@ class Decision:
 
 
 class GameWalk:
-    def __init__(self, game_id: str, actions: list[Action]):
+    def __init__(self, game_id: str, actions: list[Action], pregame=None):
         self.game_id = game_id
         self.actions = actions
+        # nba_laya.context.Pregame, or None when no earlier games are saved.
+        self.pregame = pregame
         self.home: str | None = None
         self.away: str | None = None
         self.team_of: dict[int, str] = {}
@@ -99,6 +120,8 @@ class GameWalk:
         self.on_floor: dict[str, list[str]] = {}
         self.floor_period: int | None = None
         self.fga: dict[tuple[str, str], int] = {}
+        # (team, name) -> [points, field goals made, field goals attempted] tonight
+        self.tonight: dict[tuple[str, str], list[int]] = {}
         self.comeback_open: dict[str, bool] = {}
         self.last_plays: list[str] = []
         self.scoring_events: list[tuple[float, str, int]] = []
@@ -163,6 +186,35 @@ class GameWalk:
         shots_tonight = {
             name: self.fga.get((self.possession, name), 0) for name in with_ball
         } if len(with_ball) == 5 else {}
+        teams, drift = {}, 0.0
+        if self.pregame is not None:
+            teams = {t: self.pregame.teams[t] for t in (self.home, self.away) if t in self.pregame.teams}
+            if len(teams) == 2:
+                net_diff = teams[self.home]["net"] - teams[self.away]["net"]
+                drift = (net_diff + HOME_COURT_POINTS) * min(1.0, left / REGULATION_SECONDS)
+        players = {}
+        if shots_tonight:
+            for name in with_ball:
+                profile = {}
+                if self.pregame is not None:
+                    raw = self.pregame.player(name) or {}
+                    # Short keys and two decimals: the tokenizer charges per character.
+                    profile = {
+                        short: round(raw[key], 2)
+                        for key, short in (("share", "share"), ("clutch_share", "clutch"), ("three_rate", "three"))
+                        if key in raw
+                    }
+                line = self.tonight.get((self.possession, name))
+                if line:
+                    profile["pts"] = line[0]
+                    profile["fg"] = f"{line[1]}/{line[2]}"
+                if profile:
+                    players[name] = profile
+        # A team is in the bonus when the opponent has committed 5 team fouls this period.
+        in_bonus = [
+            team for team, opp in ((self.home, self.away), (self.away, self.home))
+            if self.team_fouls.get(opp, 0) >= BONUS_TEAM_FOULS
+        ]
         return Snapshot(
             game_id=self.game_id,
             action_number=action.action_number,
@@ -182,8 +234,12 @@ class GameWalk:
                 for team in (self.home, self.away)
             },
             last_timeout=last_timeout,
+            # Fouls for players on the floor, plus anyone in foul trouble on the bench.
             fouls={
-                team: dict(players)
+                team: {
+                    name: n for name, n in players.items()
+                    if name in self.on_floor.get(team, []) or n >= FOUL_TROUBLE
+                }
                 for team, players in self.fouls.items()
                 if players
             },
@@ -196,9 +252,12 @@ class GameWalk:
                 if players
             },
             last_plays=list(self.last_plays[-LAST_PLAYS:]),
-            win_prob_home=win_prob(home_margin, left, self.possession == self.home),
+            win_prob_home=win_prob(home_margin + drift, left, self.possession == self.home),
             shots_tonight=shots_tonight,
             comeback=comeback,
+            teams=teams,
+            players=players,
+            in_bonus=in_bonus,
         )
 
     def _comeback_trigger(self, score: dict[str, int]) -> dict | None:
@@ -246,9 +305,15 @@ class GameWalk:
             if action.player_name and action.foul_personal_total:
                 self.fouls.setdefault(action.team_tricode, {})[action.player_name] = action.foul_personal_total
         self._track_floor(action)
-        if action.action_type in FIELD_GOALS and action.team_tricode and action.player_name:
+        if action.team_tricode and action.player_name:
             key = (action.team_tricode, action.player_name)
-            self.fga[key] = self.fga.get(key, 0) + 1
+            if action.action_type in FIELD_GOALS:
+                self.fga[key] = self.fga.get(key, 0) + 1
+                line = self.tonight.setdefault(key, [0, 0, 0])
+                line[2] += 1
+                line[1] += int(action.made_shot)
+            if points:
+                self.tonight.setdefault(key, [0, 0, 0])[0] += points
 
         self.possession = self._possession_after(action)
 

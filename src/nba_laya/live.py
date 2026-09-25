@@ -28,14 +28,40 @@ from nba_laya.state import Decision, GameWalk
 LIVE_STATUS = 2  # gameStatus: 1 scheduled, 2 in progress, 3 final
 
 
-def live_game_ids() -> list[tuple[str, str]]:
+def live_games() -> list[dict]:
     payload, _ = fetch_json(scoreboard_url())
-    games = (payload or {}).get("scoreboard", {}).get("games", [])
+    board = (payload or {}).get("scoreboard", {})
     return [
-        (g["gameId"], f"{g['awayTeam']['teamTricode']} @ {g['homeTeam']['teamTricode']}")
-        for g in games
+        {"game_id": g["gameId"], "date": board.get("gameDate"),
+         "home": g["homeTeam"]["teamTricode"], "away": g["awayTeam"]["teamTricode"]}
+        for g in board.get("games", [])
         if g.get("gameStatus") == LIVE_STATUS
     ]
+
+
+def live_game_ids() -> list[tuple[str, str]]:
+    return [(g["game_id"], f"{g['away']} @ {g['home']}") for g in live_games()]
+
+
+def load_ledger(data_dir: Path = Path("data"), log=print):
+    """Pregame ratings through every saved tape. Refresh nightly with make season."""
+    from nba_laya.context import ledger_through, load_summaries
+
+    dirs = sorted(p for p in data_dir.glob("season_*") if p.is_dir())
+    if not dirs:
+        log("no saved seasons; live calls run without team strength or shot share")
+        return None
+    return ledger_through(load_summaries(dirs, log=log))
+
+
+def pregame_for(ledger, game: dict):
+    from nba_laya.context import Pregame
+
+    if ledger is None or not game.get("date"):
+        return None
+    season = int(game["game_id"][3:5])
+    teams = ledger.pregame((game["away"], game["home"]), game["date"], season)["teams"]
+    return Pregame(teams=teams, date=game["date"], player=ledger.player)
 
 
 @dataclass
@@ -44,6 +70,7 @@ class GamePoller:
     model: str = "rules"
     client: SystemOneClient | None = None
     log_path: Path | None = None
+    pregame: object = None
     etag: str | None = None
     last_action_number: int = -1
     walk: GameWalk = field(init=False)
@@ -53,7 +80,7 @@ class GamePoller:
     unchanged: int = 0
 
     def __post_init__(self) -> None:
-        self.walk = GameWalk(self.game_id, [])
+        self.walk = GameWalk(self.game_id, [], pregame=self.pregame)
 
     def poll(self) -> list[dict]:
         """Fetch once. Return the decision rows produced by new actions."""
@@ -128,17 +155,21 @@ class GamePoller:
 def run_live(interval: float = 4.0, model: str = "rules", base_url: str = "http://127.0.0.1:8000",
              log_dir: Path = Path("logs/live"), once: bool = False, log=print) -> None:
     client = SystemOneClient(base_url, model="convaiinnovations/laya-multilingual") if model == "laya" else None
+    ledger = load_ledger(log=log)
     pollers: dict[str, GamePoller] = {}
     while True:
         try:
-            live = live_game_ids()
+            games = live_games()
         except FeedError as exc:
             log(f"scoreboard: {exc}")
-            live = []
-        for gid, label in live:
+            games = []
+        live = [(g["game_id"], f"{g['away']} @ {g['home']}") for g in games]
+        for game in games:
+            gid = game["game_id"]
             if gid not in pollers:
-                log(f"tracking {label} ({gid})")
-                pollers[gid] = GamePoller(gid, model=model, client=client, log_path=log_dir / f"{model}_{gid}.jsonl")
+                log(f"tracking {game['away']} @ {game['home']} ({gid})")
+                pollers[gid] = GamePoller(gid, model=model, client=client, log_path=log_dir / f"{model}_{gid}.jsonl",
+                                          pregame=pregame_for(ledger, game))
         for gid, poller in list(pollers.items()):
             try:
                 rows = poller.poll()

@@ -38,13 +38,35 @@ def answer(snapshot: Snapshot, previous_wp: float | None, questions: dict) -> di
     if "run_continues" in questions:
         answers["run_continues"] = _noul(P_RUN_CONTINUES)
     if "shooter" in questions:
-        # Shots so far tonight, plus one so a player with zero still has a chance.
-        answers["shooter"] = _choice({
-            name: snapshot.shots_tonight.get(name, 0) + 1 for name in questions["shooter"]["criteria"]
-        })
+        answers["shooter"] = _choice(_shooter_weights(snapshot, list(questions["shooter"]["criteria"])))
     if "comeback" in questions:
         answers["comeback"] = _noul(_p_comeback(snapshot))
     return answers
+
+
+DEFAULT_SHARE = 0.12
+
+
+def _shooter_weights(snapshot: Snapshot, names: list[str]) -> dict[str, float]:
+    """Half season shot share (clutch share in the clutch), half tonight's share among these five.
+
+    With no season history, falls back to tonight's shots plus one.
+    """
+    key = "clutch_share" if snapshot.is_clutch else "share"
+    season = {
+        name: snapshot.players.get(name, {}).get(key, snapshot.players.get(name, {}).get("share"))
+        for name in names
+    }
+    if not any(v is not None for v in season.values()):
+        return {name: snapshot.shots_tonight.get(name, 0) + 1 for name in names}
+    season = {name: (v if v is not None else DEFAULT_SHARE) for name, v in season.items()}
+    total_season = sum(season.values()) or 1.0
+    tonight_total = sum(snapshot.shots_tonight.get(name, 0) for name in names)
+    weights = {}
+    for name in names:
+        tonight = (snapshot.shots_tonight.get(name, 0) + 1) / (tonight_total + len(names))
+        weights[name] = 0.5 * season[name] / total_season + 0.5 * tonight
+    return weights
 
 
 def _p_comeback(snapshot: Snapshot) -> float:

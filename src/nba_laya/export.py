@@ -67,7 +67,9 @@ def export(log_paths: list[Path], out_dir: Path, holdout_frac: float = 0.15, cal
             for line in handle:
                 row = json.loads(line)
                 rows_by_game.setdefault(row["game_id"], []).append(row)
-    games = sorted(rows_by_game)
+    # Date order, not id order: 2024-25 playoff ids (004...) sort after 2025-26
+    # regular-season ids (002...), which would push last year's playoffs into test.
+    games = sorted(rows_by_game, key=lambda gid: (rows_by_game[gid][0].get("game_date") or "", gid))
     n = len(games)
     n_test = max(1, int(n * holdout_frac)) if n > 2 else 0
     n_calib = max(1, int(n * calib_frac)) if n > 3 else 0

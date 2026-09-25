@@ -14,9 +14,9 @@ from nba_laya.rules import answer
 from nba_laya.state import GameWalk, load_game
 
 
-def replay(payload: dict, model: str = "rules", client: SystemOneClient | None = None) -> list[dict]:
+def replay(payload: dict, model: str = "rules", client: SystemOneClient | None = None, pregame=None) -> list[dict]:
     game_id, actions = load_game(payload)
-    decisions = GameWalk(game_id, actions).walk()
+    decisions = GameWalk(game_id, actions, pregame=pregame).walk()
     grade(decisions, actions)
     rows = []
     previous_wp = None
@@ -32,6 +32,7 @@ def replay(payload: dict, model: str = "rules", client: SystemOneClient | None =
         previous_wp = snap.win_prob_home
         rows.append({
             "game_id": game_id,
+            "game_date": pregame.date if pregame is not None else None,
             "action_number": snap.action_number,
             "model": model,
             "snapshot": snap.as_state(),

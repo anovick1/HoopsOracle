@@ -38,9 +38,11 @@ def main() -> None:
     exp.add_argument("logs", nargs="+", type=Path)
     exp.add_argument("--out-dir", type=Path, default=Path("finetune/data"))
 
-    grade = sub.add_parser("grade-dir", help="rules-grade every play-by-play file in a directory")
-    grade.add_argument("pbp_dir", type=Path)
-    grade.add_argument("--out-dir", type=Path, default=Path("logs/graded"))
+    grade = sub.add_parser("grade-dir", help="rules-grade play-by-play folders in date order, with pregame context")
+    grade.add_argument("pbp_dirs", nargs="+", type=Path)
+    grade.add_argument("--seed-dir", type=Path, action="append", default=[],
+                       help="folder that only feeds the pregame ratings (not graded); repeatable")
+    grade.add_argument("--out-dir", type=Path, default=Path("logs"))
 
     live = sub.add_parser("live", help="poll today's live games and decide at each possession")
     live.add_argument("--model", default="rules", choices=("rules", "laya"))
@@ -73,26 +75,32 @@ def main() -> None:
 
 
 def _grade_dir(args: argparse.Namespace) -> None:
+    """Every game gets the ratings and shot shares from games before it, so the
+    folders are walked together in date order, never one file at a time."""
     import json
 
-    files = sorted(args.pbp_dir.glob("playbyplay_*.json"))
-    args.out_dir.mkdir(parents=True, exist_ok=True)
+    from nba_laya.context import in_date_order, load_summaries
+
+    targets = {gid: path for d in args.pbp_dirs for path in d.glob("playbyplay_*.json")
+               for gid in [path.stem.split("_", 1)[1]]}
+    summaries = load_summaries(list(args.seed_dir) + list(args.pbp_dirs))
     done = failed = 0
-    for path in files:
-        out = args.out_dir / (path.stem.replace("playbyplay_", "rules_") + ".jsonl")
-        if out.exists():
+    for summary, pregame in in_date_order(summaries):
+        path = targets.get(summary.game_id)
+        if path is None:
             continue
+        out = args.out_dir / f"season_{summary.season:02d}" / f"rules_{summary.game_id}.jsonl"
         try:
-            rows = replay(json.loads(path.read_text()), model="rules")
+            rows = replay(json.loads(path.read_text()), model="rules", pregame=pregame)
         except Exception as exc:  # one bad tape should not stop the season
             failed += 1
             print(f"{path.name}: {type(exc).__name__}: {exc}")
             continue
         write_log(rows, out)
         done += 1
-        if done % 100 == 0:
+        if done % 250 == 0:
             print(f"graded {done}")
-    print(f"graded {done}, failed {failed}, files {len(files)}")
+    print(f"graded {done}, failed {failed}, targets {len(targets)}")
 
 
 def _fetch_season(args: argparse.Namespace) -> None:
