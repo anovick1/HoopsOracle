@@ -227,6 +227,8 @@ def main():
     ap.add_argument("--max-eval", type=int, default=20000,
                     help="cap calib and test items; both are still held-out games (0 = all)")
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--no-checkpointing", action="store_true",
+                    help="skip activation recomputation; ~30%% faster, needs more GPU memory (fine on A100)")
     args = ap.parse_args()
 
     random.seed(args.seed)
@@ -242,7 +244,7 @@ def main():
     tok = AutoTokenizer.from_pretrained(os.path.join(model_dir, "tokenizer"))
     with open(os.path.join(model_dir, "rl_agent_config.json")) as f:
         cfg = json.load(f)
-    cfg["gradient_checkpointing"] = True
+    cfg["gradient_checkpointing"] = not args.no_checkpointing
     cfg["max_len"] = 1024
     cfg["head_max_len"] = 256
 
@@ -254,8 +256,9 @@ def main():
 
     model = build_model(cfg, encoder_dir=os.path.join(model_dir, "encoder"))
     model.load_state_dict(load_file(os.path.join(model_dir, "model.safetensors")), strict=True)
-    model.encoder.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
-    model.head_checkpointing = True
+    if not args.no_checkpointing:
+        model.encoder.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+        model.head_checkpointing = True
     model.to(device)
 
     print("\n== zero-shot on test (same weights laya-serve uses)")
