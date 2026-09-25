@@ -1,0 +1,12 @@
+[project]
+name = "nba-laya"
+version = "0.1.0"
+description = "NBA possession decisions: snapshot, typed calls, grade them after the game."
+requires-python = ">=3.11"
+dependencies = ["curl_cffi>=0.7"]
+
+[project.scripts]
+nba-laya = "nba_laya.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
