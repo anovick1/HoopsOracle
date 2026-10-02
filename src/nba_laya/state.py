@@ -80,6 +80,12 @@ class Snapshot:
             "period": self.period,
             "clock": self.clock,
             "score": self.score,
+            # The margin-and-clock formula's number, so the model starts from it
+            # instead of learning arithmetic from text. Keyed by home tricode.
+            "win_prob": {self.home: round(self.win_prob_home, 2)},
+            # The margin-and-clock formula's number, so the model starts from it
+            # instead of learning arithmetic from text. Keyed by home tricode.
+            "win_prob": {self.home: round(self.win_prob_home, 2)},
             "possession": self.possession,
             "run": self.run,
             "last_3min": self.last_3min,

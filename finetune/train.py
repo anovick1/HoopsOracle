@@ -36,12 +36,14 @@ WEIGHT_CAP = 6.0
 
 
 def load_rows(path):
-    """Read a .jsonl, or the .jsonl.gz next to it if that is what got uploaded."""
+    """Read train/calib/test. The .jsonl.gz wins when both exist: a stale
+    uncompressed export left in the folder once trained a model on old data."""
     import gzip
 
     path = str(path)
-    if not os.path.exists(path) and os.path.exists(path + ".gz"):
+    if os.path.exists(path + ".gz"):
         path = path + ".gz"
+    print(f"reading {path}")
     opener = gzip.open if path.endswith(".gz") else open
     with opener(path, "rt") as handle:
         return [json.loads(line) for line in handle]
