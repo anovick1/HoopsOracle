@@ -49,7 +49,13 @@ def load_rows(path):
         return [json.loads(line) for line in handle]
 
 
-def build_items(rows, tok, cfg, limit=0, seed=0, log=print):
+# Questions whose answer is the same for every possession of a game. Capped per
+# game in training: 200 copies of "OKC wins" teaches the model to recognise the
+# game, not basketball, and shows up as a calibration temperature pinned at the cap.
+GAME_CONSTANT = {"winner", "comeback"}
+
+
+def build_items(rows, tok, cfg, limit=0, seed=0, per_game_cap=0, log=print):
     """Tokenize rows into per-question items. With a limit, rows are sampled first
     so a 100k-item run does not tokenize the whole season."""
     if limit:
@@ -57,7 +63,9 @@ def build_items(rows, tok, cfg, limit=0, seed=0, log=print):
         random.Random(seed).shuffle(rows)
     items = []
     dropped = 0
+    capped = 0
     used = 0
+    seen = defaultdict(int)
     for row in rows:
         if limit and len(items) >= limit:
             break
@@ -68,6 +76,12 @@ def build_items(rows, tok, cfg, limit=0, seed=0, log=print):
         for qid, q in questions.items():
             if qid not in gold:
                 continue
+            if per_game_cap and qid in GAME_CONSTANT:
+                key = (row["game_id"], qid)
+                if seen[key] >= per_game_cap:
+                    capped += 1
+                    continue
+                seen[key] += 1
             t = q["type"]
             crit = q.get("criteria", {})
             g = gold[qid]
@@ -91,7 +105,7 @@ def build_items(rows, tok, cfg, limit=0, seed=0, log=print):
                 "ids": seq, "markers": markers, "qtype": QTYPES[t], "target": target,
                 "label": int(np.argmax(target)), "qid": qid, "game_id": row["game_id"],
             })
-    log(f"built {len(items)} items from {used} of {len(rows)} rows (dropped {dropped})")
+    log(f"built {len(items)} items from {used} of {len(rows)} rows (dropped {dropped}, per-game cap removed {capped})")
     return items
 
 
@@ -159,7 +173,35 @@ def fit_one_temp(sel):
         return loss
 
     opt.step(closure)
-    return float(torch.clamp(log_t.exp(), 0.1, 10.0).item())
+    # Wide cap on purpose: a fitted value far above 1 is a diagnostic (the model
+    # is badly overconfident on that question) and should be visible, not hidden.
+    return float(torch.clamp(log_t.exp(), 0.1, 50.0).item())
+
+
+def temp_for(temps, item):
+    """Per-question temperature when fitted, else the per-type one.
+
+    One temperature shared by winner (2 options), score_type (3) and shooter
+    (5 names) let the worst-calibrated question flatten the others."""
+    if isinstance(temps, dict):
+        return temps["by_question"].get(item["qid"], temps["by_type"][item["qtype"]])
+    return temps[item["qtype"]]
+
+
+def fit_temperatures(items, logits, log=print):
+    by_type = [1.0, 1.0, 1.0]
+    for qt in range(3):
+        sel = [(z, it["target"]) for it, z in zip(items, logits) if it["qtype"] == qt]
+        if sel:
+            by_type[qt] = fit_one_temp(sel)
+    by_question = {}
+    for qid in sorted({it["qid"] for it in items}):
+        sel = [(z, it["target"]) for it, z in zip(items, logits) if it["qid"] == qid]
+        if len(sel) >= 50:
+            by_question[qid] = fit_one_temp(sel)
+    log("temperatures by type (choice, score, noul):", [round(t, 3) for t in by_type])
+    log("temperatures by question:", {q: round(t, 3) for q, t in by_question.items()})
+    return {"by_type": by_type, "by_question": by_question}
 
 
 @torch.no_grad()
@@ -194,7 +236,7 @@ def scoreboard(items, logits, temps, log=print):
 def _scoreboard_rows(pairs_in, temps, log):
     per_q = defaultdict(list)
     for it, z in pairs_in:
-        z = np.asarray(z, dtype=np.float64) / temps[it["qtype"]]
+        z = np.asarray(z, dtype=np.float64) / temp_for(temps, it)
         p = np.exp(z - z.max())
         p /= p.sum()
         truth = it["label"]
@@ -229,6 +271,8 @@ def main():
     ap.add_argument("--max-eval", type=int, default=20000,
                     help="cap calib and test items; both are still held-out games (0 = all)")
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--per-game-cap", type=int, default=8,
+                    help="max training items per game for winner/comeback (0 = no cap)")
     ap.add_argument("--no-checkpointing", action="store_true",
                     help="skip activation recomputation; ~30%% faster, needs more GPU memory (fine on A100)")
     args = ap.parse_args()
@@ -250,7 +294,8 @@ def main():
     cfg["max_len"] = 1024
     cfg["head_max_len"] = 256
 
-    train_items = build_items(load_rows(f"{args.data}/train.jsonl"), tok, cfg, limit=args.max_train, seed=args.seed)
+    train_items = build_items(load_rows(f"{args.data}/train.jsonl"), tok, cfg, limit=args.max_train, seed=args.seed,
+                              per_game_cap=args.per_game_cap)
     calib_items = build_items(load_rows(f"{args.data}/calib.jsonl"), tok, cfg, limit=args.max_eval, seed=args.seed + 1)
     test_items = build_items(load_rows(f"{args.data}/test.jsonl"), tok, cfg, limit=args.max_eval, seed=args.seed + 2)
     weights = class_weights(train_items)
@@ -329,12 +374,7 @@ def main():
 
     print("\n== fitting temperatures on calib split")
     calib_logits = predict_logits(model, calib_items, tok, device)
-    temps = [1.0, 1.0, 1.0]
-    for qt in range(3):
-        sel = [(z, it["target"]) for it, z in zip(calib_items, calib_logits) if it["qtype"] == qt]
-        if sel:
-            temps[qt] = fit_one_temp(sel)
-    print("temperatures (choice, score, noul):", [round(t, 3) for t in temps])
+    temps = fit_temperatures(calib_items, calib_logits)
 
     print("\n== fine-tuned on test")
     results = scoreboard(test_items, predict_logits(model, test_items, tok, device), temps)
@@ -346,7 +386,10 @@ def main():
     tok.save_pretrained(os.path.join(args.out, "tokenizer"))
     cfg["fine_tuned"] = True
     cfg["model_name"] = "laya-nba"
-    cfg["temperature"] = temps
+    # laya-serve reads one temperature per type; the per-question ones are kept
+    # beside it for the engine, which applies them after the call.
+    cfg["temperature"] = temps["by_type"]
+    cfg["temperature_by_question"] = temps["by_question"]
     cfg.pop("temperature_by_options", None)
     with open(os.path.join(args.out, "rl_agent_config.json"), "w") as f:
         json.dump(cfg, f, indent=2)
