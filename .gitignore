@@ -7,3 +7,4 @@ logs/
 data/season_*/
 logs/
 finetune/data/
+models/

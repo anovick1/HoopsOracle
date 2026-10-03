@@ -127,10 +127,17 @@ class GamePoller:
         try:
             if self.model == "rules" or self.client is None:
                 answers = answer(snap, self.previous_wp, questions)
+            elif self.model == "hybrid":
+                from nba_laya.hybrid import hybrid_answer
+
+                answers = hybrid_answer(snap, self.previous_wp, questions,
+                                        self.client.system_one(snap.as_state(), questions))
             else:
                 answers = self.client.system_one(snap.as_state(), questions)
         except SystemOneError as exc:
-            answers = {"_error": str(exc)}
+            # The formula still answers when the model is down.
+            answers = answer(snap, self.previous_wp, questions)
+            answers["_fallback"] = str(exc)[:120]
         latency_ms = round((time.time() - t0) * 1000)
         self.previous_wp = snap.win_prob_home
         row = {
@@ -152,9 +159,19 @@ class GamePoller:
         return row
 
 
+def make_client(model: str, base_url: str, checkpoint: str | None):
+    if model == "rules":
+        return None
+    if checkpoint:
+        from nba_laya.client import LocalLayaClient
+
+        return LocalLayaClient(checkpoint)
+    return SystemOneClient(base_url, model="convaiinnovations/laya-multilingual")
+
+
 def run_live(interval: float = 4.0, model: str = "rules", base_url: str = "http://127.0.0.1:8000",
-             log_dir: Path = Path("logs/live"), once: bool = False, log=print) -> None:
-    client = SystemOneClient(base_url, model="convaiinnovations/laya-multilingual") if model == "laya" else None
+             log_dir: Path = Path("logs/live"), once: bool = False, checkpoint: str | None = None, log=print) -> None:
+    client = make_client(model, base_url, checkpoint)
     ledger = load_ledger(log=log)
     pollers: dict[str, GamePoller] = {}
     while True:

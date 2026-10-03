@@ -25,10 +25,14 @@ def replay(payload: dict, model: str = "rules", client: SystemOneClient | None =
         questions = build_questions(snap)
         if model == "rules":
             answers = answer(snap, previous_wp, questions)
-        elif client is not None:
-            answers = client.system_one(snap.as_state(), questions)
-        else:
+        elif client is None:
             raise RuntimeError(f"model {model!r} needs a client")
+        elif model == "hybrid":
+            from nba_laya.hybrid import hybrid_answer
+
+            answers = hybrid_answer(snap, previous_wp, questions, client.system_one(snap.as_state(), questions))
+        else:
+            answers = client.system_one(snap.as_state(), questions)
         previous_wp = snap.win_prob_home
         rows.append({
             "game_id": game_id,

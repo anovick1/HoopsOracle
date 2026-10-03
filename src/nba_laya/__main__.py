@@ -17,9 +17,11 @@ def main() -> None:
     play = sub.add_parser("replay", help="grade one finished game")
     play.add_argument("--game-id", help="10-digit NBA game id, fetched from the live CDN")
     play.add_argument("--pbp", type=Path, help="play-by-play JSON file")
-    play.add_argument("--model", default="rules", choices=("rules", "laya", "jev"))
+    play.add_argument("--model", default="rules", choices=("rules", "laya", "hybrid", "jev"))
     play.add_argument("--out", type=Path, help="JSONL log path")
     play.add_argument("--base-url", default=os.environ.get("LAYA_BASE_URL", "http://127.0.0.1:8000"))
+    play.add_argument("--checkpoint", default=os.environ.get("LAYA_CHECKPOINT"),
+                      help="local Laya folder (Colab output); runs in-process instead of calling a server")
 
     board = sub.add_parser("scoreboard", help="compare models over graded logs")
     board.add_argument("logs", nargs="+", type=Path)
@@ -45,16 +47,18 @@ def main() -> None:
     grade.add_argument("--out-dir", type=Path, default=Path("logs"))
 
     live = sub.add_parser("live", help="poll today's live games and decide at each possession")
-    live.add_argument("--model", default="rules", choices=("rules", "laya"))
+    live.add_argument("--model", default="rules", choices=("rules", "laya", "hybrid"))
     live.add_argument("--interval", type=float, default=4.0, help="seconds between polls")
     live.add_argument("--base-url", default=os.environ.get("LAYA_BASE_URL", "http://127.0.0.1:8000"))
+    live.add_argument("--checkpoint", default=os.environ.get("LAYA_CHECKPOINT"))
     live.add_argument("--once", action="store_true", help="one poll cycle, then exit")
 
     args = parser.parse_args()
     if args.command == "live":
         from nba_laya.live import run_live
 
-        run_live(interval=args.interval, model=args.model, base_url=args.base_url, once=args.once)
+        run_live(interval=args.interval, model=args.model, base_url=args.base_url, once=args.once,
+                 checkpoint=args.checkpoint)
         return
     if args.command == "export":
         from nba_laya.export import export
@@ -165,8 +169,10 @@ def _fetch(args: argparse.Namespace) -> None:
 def _replay(args: argparse.Namespace) -> None:
     payload = load_payload(args.game_id, args.pbp)
     client = None
-    if args.model == "laya":
-        client = SystemOneClient(args.base_url, model="convaiinnovations/laya-multilingual")
+    if args.model in ("laya", "hybrid"):
+        from nba_laya.live import make_client
+
+        client = make_client(args.model, args.base_url, args.checkpoint)
     elif args.model == "jev":
         key = os.environ.get("TYPESAFE_API_KEY")
         if not key:
