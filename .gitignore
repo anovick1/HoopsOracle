@@ -8,3 +8,4 @@ data/season_*/
 logs/
 finetune/data/
 models/
+data/injury/

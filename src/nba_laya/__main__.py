@@ -53,7 +53,19 @@ def main() -> None:
     live.add_argument("--checkpoint", default=os.environ.get("LAYA_CHECKPOINT"))
     live.add_argument("--once", action="store_true", help="one poll cycle, then exit")
 
+    inj = sub.add_parser("injury-archive", help="download every hourly injury report PDF in a date range")
+    inj.add_argument("--start", required=True, help="YYYY-MM-DD")
+    inj.add_argument("--end", required=True, help="YYYY-MM-DD")
+    inj.add_argument("--out-dir", type=Path, default=Path("data/injury"))
+
     args = parser.parse_args()
+    if args.command == "injury-archive":
+        from datetime import date
+
+        from nba_laya.injury import archive
+
+        print(archive(date.fromisoformat(args.start), date.fromisoformat(args.end), args.out_dir))
+        return
     if args.command == "live":
         from nba_laya.live import run_live
 
