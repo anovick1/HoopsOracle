@@ -9,3 +9,5 @@ logs/
 finetune/data/
 models/
 data/injury/
+finetune/statlines/
+logs/statlines/
