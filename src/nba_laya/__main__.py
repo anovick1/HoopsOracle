@@ -35,6 +35,7 @@ def main() -> None:
     season.add_argument("--playoffs", action="store_true", help="include playoff games")
     season.add_argument("--out-dir", type=Path, default=Path("data"))
     season.add_argument("--pause", type=float, default=0.6)
+    season.add_argument("--kind", default="playbyplay", choices=("playbyplay", "boxscore"))
 
     exp = sub.add_parser("export", help="graded logs -> Laya training rows, split by game")
     exp.add_argument("logs", nargs="+", type=Path)
@@ -53,18 +54,26 @@ def main() -> None:
     live.add_argument("--checkpoint", default=os.environ.get("LAYA_CHECKPOINT"))
     live.add_argument("--once", action="store_true", help="one poll cycle, then exit")
 
-    inj = sub.add_parser("injury-archive", help="download every hourly injury report PDF in a date range")
-    inj.add_argument("--start", required=True, help="YYYY-MM-DD")
-    inj.add_argument("--end", required=True, help="YYYY-MM-DD")
-    inj.add_argument("--out-dir", type=Path, default=Path("data/injury"))
+
+    sl = sub.add_parser("statlines", help="build stat-line rows (Q1/half/Q3 calls for the stars) for whole seasons")
+    sl.add_argument("--seasons", type=int, nargs="+", default=[24, 25])
+    sl.add_argument("--seed", type=int, nargs="*", default=[23])
+    sl.add_argument("--out-dir", type=Path, default=Path("logs/statlines"))
+
+    sle = sub.add_parser("statlines-export", help="stat-line rows -> finetune/statlines/{train,calib,test}.jsonl")
+    sle.add_argument("rows", nargs="+", type=Path)
+    sle.add_argument("--out-dir", type=Path, default=Path("finetune/statlines"))
 
     args = parser.parse_args()
-    if args.command == "injury-archive":
-        from datetime import date
+    if args.command == "statlines":
+        from nba_laya.statlines import build_seasons
 
-        from nba_laya.injury import archive
+        print(build_seasons(Path("data"), args.seasons, args.seed, args.out_dir))
+        return
+    if args.command == "statlines-export":
+        from nba_laya.statlines import export_training
 
-        print(archive(date.fromisoformat(args.start), date.fromisoformat(args.end), args.out_dir))
+        print(export_training(args.rows, args.out_dir))
         return
     if args.command == "live":
         from nba_laya.live import run_live
@@ -125,7 +134,7 @@ def _fetch_season(args: argparse.Namespace) -> None:
     ids = regular_season_ids(args.season)
     if args.playoffs:
         ids += playoff_ids(args.season)
-    counts = fetch_many(ids, args.out_dir / f"season_{args.season:02d}", pause=args.pause)
+    counts = fetch_many(ids, args.out_dir / f"season_{args.season:02d}", pause=args.pause, kind=args.kind)
     print(counts)
 
 

@@ -29,16 +29,23 @@ def playoff_ids(season: int) -> list[str]:
     return ids
 
 
-def fetch_many(game_ids: list[str], out_dir: Path, pause: float = 0.6, log=print) -> dict[str, int]:
+def boxscore_url(game_id: str) -> str:
+    from nba_laya.feed import CDN
+
+    return f"{CDN}/boxscore/boxscore_{game_id}.json"
+
+
+def fetch_many(game_ids: list[str], out_dir: Path, pause: float = 0.6, kind: str = "playbyplay", log=print) -> dict[str, int]:
     out_dir.mkdir(parents=True, exist_ok=True)
     counts = {"saved": 0, "skipped": 0, "missing": 0, "failed": 0}
+    url_for = playbyplay_url if kind == "playbyplay" else boxscore_url
     for gid in game_ids:
-        target = out_dir / f"playbyplay_{gid}.json"
+        target = out_dir / f"{kind}_{gid}.json"
         if target.exists():
             counts["skipped"] += 1
             continue
         try:
-            payload, _ = fetch_json(playbyplay_url(gid))
+            payload, _ = fetch_json(url_for(gid))
         except FeedError as exc:
             text = str(exc)
             if text.startswith("404"):
@@ -57,8 +64,9 @@ def fetch_many(game_ids: list[str], out_dir: Path, pause: float = 0.6, log=print
                 time.sleep(pause * 5)
             time.sleep(pause)
             continue
-        actions = (payload or {}).get("game", {}).get("actions", [])
-        if len(actions) < 50:
+        game = (payload or {}).get("game", {})
+        thin = len(game.get("actions", [])) < 50 if kind == "playbyplay" else not game.get("homeTeam", {}).get("players")
+        if thin:
             counts["missing"] += 1
             time.sleep(pause)
             continue
