@@ -281,6 +281,19 @@ def main():
     torch.manual_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("device", device)
+    if device.type == "cuda":
+        props = torch.cuda.get_device_properties(0)
+        gb = props.total_memory / 1e9
+        print(f"gpu {props.name} {gb:.0f} GB")
+        # A T4/L4-class card cannot hold the A100 settings. Fit to the card
+        # instead of crashing an hour in.
+        if gb < 20:
+            if args.no_checkpointing or args.micro_batch > 8:
+                print("small GPU: forcing activation checkpointing on, micro-batch 8, grad-accum scaled to keep the effective batch")
+                effective = args.micro_batch * args.grad_accum
+                args.no_checkpointing = False
+                args.micro_batch = 8
+                args.grad_accum = max(1, effective // 8)
 
     from huggingface_hub import snapshot_download
 
